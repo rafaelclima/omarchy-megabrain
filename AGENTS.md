@@ -390,8 +390,12 @@ stderr (`/tmp/ind-err.log` limpo).
   gera "Invalid dispatcher r". Guard `min_record_ms` (300ms) cancela taps;
   estado limpo + WAV removido + notificação. **Conflito descoberto**: P estava
   ocupado — `SUPER+P` = "Pseudo window" (defaults Omarchy tiling*.conf) e
-  `SUPER+SHIFT+P` = Google Photos (bindings.conf linha 26); PTT movido para Q
-  (verificado livre nos mods SUPER e SUPER+SHIFT)
+`SUPER+SHIFT+P` = Google Photos (bindings.conf linha 26); PTT movido para Q
+   (verificado livre nos mods SUPER e SUPER+SHIFT). **Waybar duplicada**: uso de
+   `omarchy restart waybar` neste setup gera 2 barras — o unit `waybar.service`
+   (systemd user, `Restart=on-failure`) é respawnado pelo pkill -9 do comando AO
+   MESMO TEMPO que a omarchy spawna outra instância. **Sempre usar
+   `systemctl --user restart waybar`** (1 instância, validado em 2026-08-16)
 - [x] 2026-08-16 — **Tradução com `translate_model`**: config `translate_model`
   (null = fallback; usuário optou `large-v3` no config local, ~3GB cache HF,
   warm ~16s). Engenharia: `transcribe()` no modo translate tenta o modelo
