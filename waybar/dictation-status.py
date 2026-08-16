@@ -36,7 +36,8 @@ def main():
                 f"{MIC} EN",
                 "Dictation — Gravando (tradução PT-BR → EN-US)\n\n"
                 "SUPER+SHIFT+H: parar e traduzir\n"
-                "SUPER+H: parar e transcrever em PT-BR\n\n"
+                "SUPER+H: parar e transcrever em PT-BR\n"
+                "SUPER+Shift+Q: PTT — soltar o botão para traduzir\n\n"
                 "Clique direito: parar e traduzir",
                 ["recording", "translate"],
             )
@@ -45,7 +46,8 @@ def main():
                 f"{MIC} PT",
                 "Dictation — Gravando (transcrição PT-BR)\n\n"
                 "SUPER+H: parar e transcrever\n"
-                "SUPER+SHIFT+H: parar e traduzir (EN-US)\n\n"
+                "SUPER+SHIFT+H: parar e traduzir (EN-US)\n"
+                "SUPER+Q: PTT — soltar o botão para transcrever\n\n"
                 "Clique esquerdo: parar e transcrever",
                 "recording",
             )
@@ -54,7 +56,9 @@ def main():
             MIC,
             "Dictation\n\n"
             f"{MIC} PT  SUPER+H        Transcrever (PT-BR)\n"
-            f"{MIC} EN  SUPER+SHIFT+H  Traduzir (EN-US)\n\n"
+            f"{MIC} EN  SUPER+SHIFT+H  Traduzir (EN-US)\n"
+            f"{MIC} PT  SUPER+Q        PTT transcrever (segurar/soltar)\n"
+            f"{MIC} EN  SUPER+SHIFT+Q  PTT traduzir (segurar/soltar)\n\n"
             "Clique esquerdo: transcrever\n"
             "Clique direito: traduzir",
         )
