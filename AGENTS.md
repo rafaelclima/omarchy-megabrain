@@ -13,6 +13,15 @@ e o áudio é transcrito para texto com precisão máxima e colado na janela foc
 3. Texto transcrito → clipboard (`wl-copy`) → digitado na janela focada (`wtype`)
 4. Notificação com o texto final
 
+## Modo tradução (PT-BR → EN-US)
+
+`SUPER+SHIFT+H` (`dictation toggle -t`) grava igual, mas transcreve já traduzido
+para o inglês. **Sem custo e offline**: usa `faster-whisper` com
+`task="translate"` (um passe faz ASR + tradução). A Groq é ignorada nesse modo
+propositadamente — tradução por lá custaria: `whisper-large-v3` é 2.7x o
+custo/hora do turbo e traduzir via LLM (llama) consumiria tokens. O modo fica
+registrado no state (`translate: true`) e vale para o stop com qualquer atalho.
+
 ## Indicador visual (overlay "modulador")
 
 Durante a gravação, um overlay aparece na **parte inferior central** do monitor
@@ -139,6 +148,10 @@ source Bluetooth (ver Bug #4).
   > (puxa GI do sistema + numpy/sounddevice do pip).
 - [x] 2026-08-16 — Resolução de linking do layer-shell documentada (ver Bug #2).
 - [x] 2026-08-16 — Estado agora guarda também `pid_indicator` (kill no stop).
+- [x] 2026-08-16 — **Tradução PT-BR → EN-US sem gerar custo**: rota exclusiva
+  offline (`faster-whisper task="translate"`). Rejeitadas: `whisper-large-v3`
+  Groq (2.7x custo/hora) e 2 estágios com LLM (tokens). Ativação por binding
+  separado (`SUPER+SHIFT+H`), a pedido do usuário.
 
 ## Setup (passos executados)
 
@@ -157,9 +170,10 @@ source Bluetooth (ver Bug #4).
 ## Comandos de uso
 
 ```bash
-dictation toggle   # inicia/para gravação + transcreve
-dictation record   # só grava (idempotente)
-dictation stop     # para e transcreve
+dictation toggle     # inicia/para gravação + transcreve (PT-BR)
+dictation toggle -t  # inicia/para gravação + traduz para EN-US (offline, grátis)
+dictation record     # só grava (idempotente)
+dictation stop       # para e transcreve
 ```
 
 ## Testes executados (2026-08-16)
@@ -176,6 +190,11 @@ dictation stop     # para e transcreve
 | Auto-fechamento se estado sumir (gravação órfã) | OK — fade + finalização correta do WAV |
 | Precisão em PT-BR com fala real | OK — "Oi, ei, ei, ei, ei." transcrito (Groq) |
 | **Barras com sinal controlado (tom 220-880Hz via pipe-source)** | **OK** — L=0,876/st=active; WAV com RMS real; pill idle (teal) → ativa (vermelho accent, 7728px) via diff de screenshots |
+| **Modo tradução PT-BR → EN-US (fala sintetizada edge-tts pt-BR-FranciscaNeural)** | **OK** — "Olá, como vai? Hoje está um dia lindo para programar…" → "Hello, how are you? Today is a beautiful day to schedule. I need to finish the report before lunch, please." (medium int8, offline, ~8s áudio) |
+| Regressão transcrição PT-BR (mesmo áudio, modo normal) | OK — "Olá, como vai? Hoje está um dia lindo para programar. Preciso terminar o relatório antes do almoço, por favor." (exata) |
+| `dictation stop -t` sem gravação ativa | OK — resposta limpa "Nenhuma gravação em andamento.", sem processos órfãos |
+| `hyprctl reload` após novo binding `SUPER SHIFT, H` | OK — `configerrors` vazio |
+| Fala real do usuário (mic BT) no modo tradução | **PENDENTE** — validar voz real + wtype |
 
 ## Bugs corrigidos
 
@@ -338,6 +357,24 @@ stderr (`/tmp/ind-err.log` limpo).
 - [x] 2026-08-16 — **Cores por estado (pedido do usuário)**: azul `#4DA3FF`
   quando gravando/falando (ativo) e vermelho `#E5484D` em espera de voz (idle);
   labels acompanham (".active" azul / ".idle" vermelho)
+- [x] 2026-08-16 — **Modo tradução PT-BR → EN-US** (`SUPER+SHIFT+H` /
+  `dictation toggle -t`): faster-whisper `task="translate"` **offline e sem
+  custo**; Groq ignorada nesse modo (tradução por lá custaria — turbo não
+  traduz; v3 = 2.7x; LLM = tokens); `initial_prompt`/`language` omitidos no
+  translate (evita vazamento do prompt PT na saída EN); modo lembrado no
+  state (`translate: true`) — parar com qualquer atalho traduz; notificações
+  marcadas "Traduzido (EN-US)"
+- [x] 2026-08-16 — **Módulo Waybar `custom/dictation`**: ícone de status +
+  ativação manual (esquerdo = transcrever, direito = traduzir) + tooltip com
+  os binds de cada modo. `dictation-status.py` (Python3 stdlib, lê
+  `/tmp/dictation.state` + `kill(pid,0)`, emite JSON, `interval=1`); classes
+  `recording` (azul #4DA3FF) e `recording+translate` (verde #3DD68C) — **class
+  precisa ser array JSON** `["recording","translate"]` (string com espaço vira
+  classe única e a cor não aplica); texto dos estados: `󰍬` idle, `󰍬 PT`
+  transcrição, `󰍬 EN` tradução. Validado por pixel nas screenshots da barra
+  (+48px azul / +51px verde vs baseline). Segundo waybar órfão de restart
+  anterior ocultava o novo — matar processos antigos antes de debugar a
+  barra
 
 ## Roadmap / Próximos passos
 

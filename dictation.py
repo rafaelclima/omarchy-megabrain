@@ -65,9 +65,9 @@ def state_read(cfg):
         return None
 
 
-def state_write(cfg, pid):
+def state_write(cfg, pid, translate=False):
     Path(cfg["state_file"]).write_text(
-        json.dumps({"pid": pid, "started": time.time()})
+        json.dumps({"pid": pid, "started": time.time(), "translate": translate})
     )
 
 
@@ -127,7 +127,7 @@ def spawn_indicator(cfg):
     return proc.pid
 
 
-def start_recording(cfg):
+def start_recording(cfg, translate=False):
     if is_recording(cfg):
         notify("dictation", "Gravação já em andamento.", "normal")
         return
@@ -139,12 +139,15 @@ def start_recording(cfg):
     if not pid:
         notify("dictation", "Indicador indisponível (venv-gui ausente ou desabilitado).", "critical")
         return
-    state_write(cfg, pid)
-    notify("dictation", "Gravando… pressione o atalho novamente para parar e transcrever.", "normal")
+    state_write(cfg, pid, translate)
+    msg = "Gravando… (id. português → EN-US)" if translate else "Gravando…"
+    notify("dictation", f"{msg} Pressione o atalho novamente para parar.", "normal")
 
 
-def stop_recording(cfg):
+def stop_recording(cfg, translate=False):
     state = state_read(cfg)
+    if state and state.get("translate"):
+        translate = True
     audio = Path(cfg["audio_file"])
     if state is None and not audio.exists():
         notify("dictation", "Nenhuma gravação em andamento.", "normal")
@@ -168,15 +171,18 @@ def stop_recording(cfg):
     if not audio.exists() or audio.stat().st_size < 1000:
         notify("dictation", "Gravação vazia — nada transcrito.", "critical")
         return
-    text = transcribe(cfg, audio)
+    text = transcribe(cfg, audio, translate=translate)
     if text:
         output_text(cfg, text)
-        notify("dictation", text[:500])
+        body = f"Traduzido (EN-US): {text[:500]}" if translate else text[:500]
+        notify("dictation", body)
     else:
         notify("dictation", "Não foi possível transcrever o áudio.", "critical")
 
 
-def transcribe(cfg, audio):
+def transcribe(cfg, audio, translate=False):
+    if translate:
+        return transcribe_local(cfg, audio, translate=True)
     key = load_groq_key(cfg)
     if key:
         try:
@@ -212,7 +218,7 @@ def transcribe_groq(cfg, audio, key):
     return result.text.strip()
 
 
-def transcribe_local(cfg, audio):
+def transcribe_local(cfg, audio, translate=False):
     from faster_whisper import WhisperModel
 
     model = WhisperModel(
@@ -223,9 +229,10 @@ def transcribe_local(cfg, audio):
     )
     segments, _ = model.transcribe(
         str(audio),
-        language=cfg.get("language"),
+        language=None if translate else cfg.get("language"),
+        task="translate" if translate else "transcribe",
         beam_size=5,
-        initial_prompt=cfg.get("initial_prompt"),
+        initial_prompt=None if translate else cfg.get("initial_prompt"),
         vad_filter=True,
         vad_parameters={
             "min_silence_duration_ms": 500,
@@ -244,21 +251,25 @@ def output_text(cfg, text):
 def main():
     parser = argparse.ArgumentParser(prog="dictation", description="Dictation app: voice to text")
     parser.add_argument("action", choices=["toggle", "record", "stop", "indicator"])
+    parser.add_argument(
+        "-t", "--translate", action="store_true",
+        help="Ditado PT-BR → EN-US (offline via faster-whisper, sem custo)",
+    )
     args = parser.parse_args()
     cfg = load_config()
     if args.action == "record":
-        start_recording(cfg)
+        start_recording(cfg, translate=args.translate)
     elif args.action == "stop":
-        stop_recording(cfg)
+        stop_recording(cfg, translate=args.translate)
     elif args.action == "indicator":
         pid = spawn_indicator(cfg)
         if not pid:
             notify("dictation", "Indicador indisponível (venv-gui ausente ou desabilitado).", "critical")
     else:
         if is_recording(cfg):
-            stop_recording(cfg)
+            stop_recording(cfg, translate=args.translate)
         else:
-            start_recording(cfg)
+            start_recording(cfg, translate=args.translate)
 
 
 if __name__ == "__main__":

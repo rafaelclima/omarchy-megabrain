@@ -9,6 +9,21 @@ novamente para transcrever e colar o texto na janela focada.
 2. `SUPER+H` de novo → para a gravação, transcreve e cola o texto na janela focada
 3. Notificação mostra o texto final
 
+## Modo tradução (PT-BR → EN-US)
+
+`SUPER+SHIFT+H` grava como o normal, mas a transcrição sai traduzida para o
+inglês (EN-US), colada no app focado.
+
+- **100% offline e sem custo:** usa o `faster-whisper` com `task="translate"` —
+  um único passe faz reconhecimento + tradução direto para o inglês.
+  A rota online (Groq) é propositalmente ignorada nesse modo: o endpoint de
+  tradução da Groq exige `whisper-large-v3` (2.7x o custo/hora do turbo) e
+  traduzir via LLM consumiria tokens.
+- O modo real é lembrado no estado: parando com `SUPER+H` ou `SUPER+SHIFT+H`,
+  o resultado acompanha como a gravação começou.
+- Qualidade: boa (Whisper), com imperfeições ocasionais de vocabulário
+  ("programar" → "schedule").
+
 ## Indicador visual (overlay pílula)
 
 Durante a gravação, uma pílula translúcida aparece na parte inferior central do
@@ -82,7 +97,38 @@ Atalho (Hyprland `bindings.conf`):
 
 ```conf
 bind = SUPER, H, exec, dictation toggle
+bind = SUPER SHIFT, H, exec, dictation toggle -t   # traduz para EN-US
 ```
+
+## Indicador na Waybar
+
+O módulo `custom/dictation` (em `~/.config/waybar/`) mostra o estado e permite
+ativar os modos com o mouse:
+
+- **ícone** `󰍬` => dica com os atalhos de cada modo (clique esquerdo transcreve, clique direito traduz)
+- **gravação**: `󰍬 PT` em azul (transcrição) ou `󰍬 EN` em verde (tradução) — atualiza a cada 1s
+- **tooltip**: mostra qual atalho corresponde a cada modo (SUPER+H / SUPER+SHIFT+H) e como parar
+
+```jsonc
+"custom/dictation": {
+  "exec": "/home/SEU_USUARIO/.config/waybar/dictation-status.py",
+  "return-type": "json",
+  "interval": 1,
+  "on-click": "dictation toggle",
+  "on-click-right": "dictation toggle -t"
+}
+```
+
+```css
+#custom-dictation { min-width: 12px; margin: 0 0 0 7.5px; font-size: 12px; }
+#custom-dictation.recording { color: #4da3ff; }
+#custom-dictation.recording.translate { color: #3dd68c; }
+```
+
+Arquivos: o script de status vive no repo em `waybar/dictation-status.py`
+(leia `/tmp/dictation.state` e emite JSON — só Python3 stdlib); copie para
+`~/.config/waybar/` e adicione o bloco abaixo em `config.jsonc` (com as cores
+de `style.css`):
 
 ## Debug
 
