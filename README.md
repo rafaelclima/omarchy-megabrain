@@ -29,18 +29,19 @@ inglês (EN-US), colada no app focado.
 
 ## Push-to-talk (segurar para gravar)
 
-`SUPER+P` grava enquanto segurado: soltou, transcreve e cola. `SUPER+SHIFT+P`
+`SUPER+Q` grava enquanto segurado: soltou, transcreve e cola. `SUPER+SHIFT+Q`
 faz o mesmo traduzindo para EN-US. O toggle (`SUPER+H`) continua disponível.
 
 ```conf
-bindd = SUPER, P, Dictation PTT record, exec, dictation record
-bindr = SUPER, P, exec, dictation stop
-bindd = SUPER SHIFT, P, Dictation PTT record (EN), exec, dictation record
-bindr = SUPER SHIFT, P, exec, dictation stop -t
+bindd = SUPER, Q, Dictation PTT record, exec, dictation record
+bindr = SUPER, Q, exec, dictation stop
+bindd = SUPER SHIFT, Q, Dictation PTT record (EN), exec, dictation record
+bindr = SUPER SHIFT, Q, exec, dictation stop -t
 ```
 
 Taps acidentais (< `min_record_ms`, padrão 300ms) são cancelados sem
-transcrição.
+transcrição. (Note: `SUPER+P`/`SUPER+SHIFT+P` são usados pelo Omarchy —
+"Pseudo window" e "Google Photos" — por isso o PTT ficou em `Q`.)
 
 ## Indicador visual (overlay pílula)
 

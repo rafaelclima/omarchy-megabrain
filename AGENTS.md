@@ -202,7 +202,7 @@ dictation stop       # para e transcreve
 | **Template E2E (transcribe→translate→template→clipboard)** | OK — `wl-paste` = "PREFIXO-TESTE:\nHello, how are you? …\nSUFIXO-TESTE" (config temp com `output: clipboard`) |
 | Fallback de modelo de tradução (nome inválido) | OK — cai para `fallback_model` com notificação |
 | Regressões toggle PT/EN | OK — fluxos `dictation toggle [-t]` intactos (testes anteriores releitados) |
-| **PTT físico (segurar SUPER+P no teclado)** | **PENDENTE — usuário** (release é evento físico) |
+| **PTT físico (segurar SUPER+Q no teclado)** | **PENDENTE — usuário** (release é evento físico) |
 
 ## Bugs corrigidos
 
@@ -383,12 +383,15 @@ stderr (`/tmp/ind-err.log` limpo).
   (+48px azul / +51px verde vs baseline). Segundo waybar órfão de restart
   anterior ocultava o novo — matar processos antigos antes de debugar a
   barra
-- [x] 2026-08-16 — **Push-to-talk** (`SUPER+P` / `SUPER+SHIFT+P`): segurar =
+- [x] 2026-08-16 — **Push-to-talk** (`SUPER+Q` / `SUPER+SHIFT+Q`): segurar =
   `dictation record`, soltar = `dictation stop [-t]` via `bindr` (flag `r` do
   Hyprland 0.56). **Atenção**: `bind = ..., r, exec, ...` NÃO existe — o flag
-  é parte da keyword (`bindr = SUPER, P, exec, ...`); tentar como dispatcher
+  é parte da keyword (`bindr = SUPER, Q, exec, ...`); tentar como dispatcher
   gera "Invalid dispatcher r". Guard `min_record_ms` (300ms) cancela taps;
-  estado limpo + WAV removido + notificação
+  estado limpo + WAV removido + notificação. **Conflito descoberto**: P estava
+  ocupado — `SUPER+P` = "Pseudo window" (defaults Omarchy tiling*.conf) e
+  `SUPER+SHIFT+P` = Google Photos (bindings.conf linha 26); PTT movido para Q
+  (verificado livre nos mods SUPER e SUPER+SHIFT)
 - [x] 2026-08-16 — **Tradução com `translate_model`**: config `translate_model`
   (null = fallback; usuário optou `large-v3` no config local, ~3GB cache HF,
   warm ~16s). Engenharia: `transcribe()` no modo translate tenta o modelo
