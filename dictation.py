@@ -16,6 +16,16 @@ DEFAULTS = {
     "groq_timeout": 30,
     "fallback_model": "medium",
     "fallback_cpu_threads": 10,
+    "translate_model": None,
+    "translate_prompt": "Translate to US English with correct punctuation.",
+    "min_record_ms": 300,
+    "template": None,
+    "templates": {
+        "megabrain": {
+            "prefix": "O texto abaixo foi ditado por voz. Reescreva-o corrigindo pontuação, ortografia e estrutura, devolvendo apenas o resultado final, sem comentários:\n\n",
+            "suffix": "",
+        },
+    },
     "language": None,
     "initial_prompt": "Este é um sistema de ditado por voz em português brasileiro. Transcreva exatamente o que foi falado, escrevendo todas as palavras completas, por extenso e com grafia e acentuação corretas — nunca omita ou corte letras. Não abreve nada. Use pontuação natural conforme a fala (vírgulas, ponto final, maiúsculas). Escreva números por extenso, a menos que o contexto seja claramente numérico ou técnico. Preserve nomes próprios, termos técnicos e gírias, grafados por completo. Ignore hesitações (hmm, ahn, éé, tipo) e repetições acidentais. Se um trecho estiver inaudível, escolha a palavra mais provável, completa, em vez de interromper o texto.",
     "output": "paste",
@@ -65,9 +75,9 @@ def state_read(cfg):
         return None
 
 
-def state_write(cfg, pid, translate=False):
+def state_write(cfg, pid, translate=False, template=None):
     Path(cfg["state_file"]).write_text(
-        json.dumps({"pid": pid, "started": time.time(), "translate": translate})
+        json.dumps({"pid": pid, "started": time.time(), "translate": translate, "template": template})
     )
 
 
@@ -127,7 +137,24 @@ def spawn_indicator(cfg):
     return proc.pid
 
 
-def start_recording(cfg, translate=False):
+def kill_indicator(state):
+    try:
+        os.kill(state["pid"], signal.SIGTERM)
+        for _ in range(50):
+            try:
+                os.kill(state["pid"], 0)
+                time.sleep(0.1)
+            except ProcessLookupError:
+                break
+        try:
+            os.kill(state["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    except ProcessLookupError:
+        pass
+
+
+def start_recording(cfg, translate=False, template=None):
     if is_recording(cfg):
         notify("dictation", "Gravação já em andamento.", "normal")
         return
@@ -139,40 +166,38 @@ def start_recording(cfg, translate=False):
     if not pid:
         notify("dictation", "Indicador indisponível (venv-gui ausente ou desabilitado).", "critical")
         return
-    state_write(cfg, pid, translate)
+    state_write(cfg, pid, translate, template)
     msg = "Gravando… (id. português → EN-US)" if translate else "Gravando…"
     notify("dictation", f"{msg} Pressione o atalho novamente para parar.", "normal")
 
 
-def stop_recording(cfg, translate=False):
+def stop_recording(cfg, translate=False, template=None):
     state = state_read(cfg)
-    if state and state.get("translate"):
-        translate = True
+    if state:
+        if state.get("translate"):
+            translate = True
+        if state.get("template"):
+            template = state["template"]
     audio = Path(cfg["audio_file"])
     if state is None and not audio.exists():
         notify("dictation", "Nenhuma gravação em andamento.", "normal")
         return
     if state:
-        try:
-            os.kill(state["pid"], signal.SIGTERM)
-            for _ in range(50):
-                try:
-                    os.kill(state["pid"], 0)
-                    time.sleep(0.1)
-                except ProcessLookupError:
-                    break
-            try:
-                os.kill(state["pid"], signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        except ProcessLookupError:
-            pass
+        if time.time() - state.get("started", 0) < cfg.get("min_record_ms", 300) / 1000:
+            kill_indicator(state)
+            state_clear(cfg)
+            if audio.exists():
+                audio.unlink()
+            notify("dictation", "Gravação muito curta — cancelada.", "normal")
+            return
+        kill_indicator(state)
         state_clear(cfg)
     if not audio.exists() or audio.stat().st_size < 1000:
         notify("dictation", "Gravação vazia — nada transcrito.", "critical")
         return
     text = transcribe(cfg, audio, translate=translate)
     if text:
+        text = apply_template(cfg, text, template)
         output_text(cfg, text)
         body = f"Traduzido (EN-US): {text[:500]}" if translate else text[:500]
         notify("dictation", body)
@@ -180,9 +205,25 @@ def stop_recording(cfg, translate=False):
         notify("dictation", "Não foi possível transcrever o áudio.", "critical")
 
 
+def apply_template(cfg, text, template):
+    if not template:
+        return text
+    tpl = (cfg.get("templates") or {}).get(template)
+    if not tpl:
+        notify("dictation", f"Template '{template}' não encontrado; sem template.", "normal")
+        return text
+    return f"{tpl.get('prefix', '')}{text}{tpl.get('suffix', '')}"
+
+
 def transcribe(cfg, audio, translate=False):
     if translate:
-        return transcribe_local(cfg, audio, translate=True)
+        model = cfg.get("translate_model") or cfg["fallback_model"]
+        try:
+            return transcribe_local(cfg, audio, translate=True, model_name=model)
+        except Exception as e:
+            print(f"Tradução com {model} falhou ({e}); usando {cfg['fallback_model']}…", file=sys.stderr)
+            notify("dictation", f"Modelo de tradução '{model}' indisponível; usando '{cfg['fallback_model']}'.", "normal")
+            return transcribe_local(cfg, audio, translate=True, model_name=cfg["fallback_model"])
     key = load_groq_key(cfg)
     if key:
         try:
@@ -218,11 +259,11 @@ def transcribe_groq(cfg, audio, key):
     return result.text.strip()
 
 
-def transcribe_local(cfg, audio, translate=False):
+def transcribe_local(cfg, audio, translate=False, model_name=None):
     from faster_whisper import WhisperModel
 
     model = WhisperModel(
-        cfg["fallback_model"],
+        model_name or cfg["fallback_model"],
         device="cpu",
         compute_type="int8",
         cpu_threads=cfg.get("fallback_cpu_threads", 10),
@@ -232,7 +273,7 @@ def transcribe_local(cfg, audio, translate=False):
         language=None if translate else cfg.get("language"),
         task="translate" if translate else "transcribe",
         beam_size=5,
-        initial_prompt=None if translate else cfg.get("initial_prompt"),
+        initial_prompt=cfg.get("translate_prompt") if translate else cfg.get("initial_prompt"),
         vad_filter=True,
         vad_parameters={
             "min_silence_duration_ms": 500,
@@ -250,26 +291,34 @@ def output_text(cfg, text):
 
 def main():
     parser = argparse.ArgumentParser(prog="dictation", description="Dictation app: voice to text")
-    parser.add_argument("action", choices=["toggle", "record", "stop", "indicator"])
+    parser.add_argument("action", choices=["toggle", "record", "stop", "indicator", "templates"])
     parser.add_argument(
         "-t", "--translate", action="store_true",
         help="Ditado PT-BR → EN-US (offline via faster-whisper, sem custo)",
     )
+    parser.add_argument(
+        "-T", "--template", default=None,
+        help="Aplica um template (prefixo/sufixo) à transcrição (ex.: megabrain)",
+    )
     args = parser.parse_args()
     cfg = load_config()
+    if args.action == "templates":
+        names = list((cfg.get("templates") or {}).keys())
+        print("Templates disponíveis: " + (", ".join(names) if names else "(nenhum)"))
+        return
     if args.action == "record":
-        start_recording(cfg, translate=args.translate)
+        start_recording(cfg, translate=args.translate, template=args.template)
     elif args.action == "stop":
-        stop_recording(cfg, translate=args.translate)
+        stop_recording(cfg, translate=args.translate, template=args.template)
     elif args.action == "indicator":
         pid = spawn_indicator(cfg)
         if not pid:
             notify("dictation", "Indicador indisponível (venv-gui ausente ou desabilitado).", "critical")
     else:
         if is_recording(cfg):
-            stop_recording(cfg, translate=args.translate)
+            stop_recording(cfg, translate=args.translate, template=args.template)
         else:
-            start_recording(cfg, translate=args.translate)
+            start_recording(cfg, translate=args.translate, template=args.template)
 
 
 if __name__ == "__main__":

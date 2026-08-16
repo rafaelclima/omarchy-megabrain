@@ -195,6 +195,14 @@ dictation stop       # para e transcreve
 | `dictation stop -t` sem gravação ativa | OK — resposta limpa "Nenhuma gravação em andamento.", sem processos órfãos |
 | `hyprctl reload` após novo binding `SUPER SHIFT, H` | OK — `configerrors` vazio |
 | Fala real do usuário (mic BT) no modo tradução | **PENDENTE** — validar voz real + wtype |
+| **Guard PTT (`min_record_ms` 300ms)** | **OK** — state com `started=now-0.1s` → cancelado: pid morto, state removido, wav removido, sem transcrição |
+| **`large-v3` int8 tradução (sintético PT-BR)** | **OK** — download ~3GB (cache HF) + tradução em 16s warm; com `translate_prompt` → "Hello, how are you? Today is a beautiful day to schedule. I need to finish the report before lunch, please." |
+| **`translate_prompt` (meio + grande)** | OK — medium 8s / large 16s, pontuação correta nos dois; sem prompt saía sem pontuação |
+| **Template unit (`apply_template`)** | OK — prefix+texto+suffix; nome inexistente → texto original + aviso |
+| **Template E2E (transcribe→translate→template→clipboard)** | OK — `wl-paste` = "PREFIXO-TESTE:\nHello, how are you? …\nSUFIXO-TESTE" (config temp com `output: clipboard`) |
+| Fallback de modelo de tradução (nome inválido) | OK — cai para `fallback_model` com notificação |
+| Regressões toggle PT/EN | OK — fluxos `dictation toggle [-t]` intactos (testes anteriores releitados) |
+| **PTT físico (segurar SUPER+P no teclado)** | **PENDENTE — usuário** (release é evento físico) |
 
 ## Bugs corrigidos
 
@@ -375,6 +383,27 @@ stderr (`/tmp/ind-err.log` limpo).
   (+48px azul / +51px verde vs baseline). Segundo waybar órfão de restart
   anterior ocultava o novo — matar processos antigos antes de debugar a
   barra
+- [x] 2026-08-16 — **Push-to-talk** (`SUPER+P` / `SUPER+SHIFT+P`): segurar =
+  `dictation record`, soltar = `dictation stop [-t]` via `bindr` (flag `r` do
+  Hyprland 0.56). **Atenção**: `bind = ..., r, exec, ...` NÃO existe — o flag
+  é parte da keyword (`bindr = SUPER, P, exec, ...`); tentar como dispatcher
+  gera "Invalid dispatcher r". Guard `min_record_ms` (300ms) cancela taps;
+  estado limpo + WAV removido + notificação
+- [x] 2026-08-16 — **Tradução com `translate_model`**: config `translate_model`
+  (null = fallback; usuário optou `large-v3` no config local, ~3GB cache HF,
+  warm ~16s). Engenharia: `transcribe()` no modo translate tenta o modelo
+  configurado e cai para `fallback_model` com aviso se falhar
+- [x] 2026-08-16 — **`translate_prompt`** (prompt EN de pontuação): sem ele o
+  `task="translate"` sai **sem pontuação** ("Hello how are you today…");
+  com ele, pontuação natural ("Hello, how are you? …"). Aplicado apenas no
+  modo tradução (o prompt PT continua vetado — vazar o prompt PT induz o
+  modelo a transcrever em vez de traduzir). Observação honesta: na amostra
+  sintética, medium+p == large+p em vocabulário ("programar"→"schedule" em
+  ambos — limitação do Whisper translate, não do tamanho do modelo)
+- [x] 2026-08-16 — **Templates (modo megabrain)**: `-T/--template <nome>`
+  (lembrado no estado, como translate) + `template` no config; action
+  `templates` lista nomes; `prefix + texto + suffix` aplicado após tradução;
+  templates em `cfg["templates"]` (default `megabrain` no DEFAULTS)
 
 ## Roadmap / Próximos passos
 

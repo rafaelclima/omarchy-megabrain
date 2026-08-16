@@ -21,8 +21,26 @@ inglês (EN-US), colada no app focado.
   traduzir via LLM consumiria tokens.
 - O modo real é lembrado no estado: parando com `SUPER+H` ou `SUPER+SHIFT+H`,
   o resultado acompanha como a gravação começou.
+- Modelo: `translate_model` (padrão `large-v3`, ~3GB download no 1º uso;
+  `null` = usa `fallback_model`). Um prompt de pontuação em inglês
+  (`translate_prompt`) é aplicado só na tradução.
 - Qualidade: boa (Whisper), com imperfeições ocasionais de vocabulário
   ("programar" → "schedule").
+
+## Push-to-talk (segurar para gravar)
+
+`SUPER+P` grava enquanto segurado: soltou, transcreve e cola. `SUPER+SHIFT+P`
+faz o mesmo traduzindo para EN-US. O toggle (`SUPER+H`) continua disponível.
+
+```conf
+bindd = SUPER, P, Dictation PTT record, exec, dictation record
+bindr = SUPER, P, exec, dictation stop
+bindd = SUPER SHIFT, P, Dictation PTT record (EN), exec, dictation record
+bindr = SUPER SHIFT, P, exec, dictation stop -t
+```
+
+Taps acidentais (< `min_record_ms`, padrão 300ms) são cancelados sem
+transcrição.
 
 ## Indicador visual (overlay pílula)
 
@@ -87,6 +105,11 @@ repositório). Principais chaves:
 | `groq_timeout` | `30` | timeout da API em segundos |
 | `fallback_model` | `medium` | modelo offline (faster-whisper, int8 CPU) |
 | `fallback_cpu_threads` | `10` | threads do modelo offline |
+| `translate_model` | `null` | modelo do modo tradução (`null` = usa `fallback_model`; ex. `large-v3`) |
+| `translate_prompt` | prompt EN | prompt de pontuação usado apenas na tradução |
+| `min_record_ms` | `300` | gravações mais curtas são canceladas (tap acidental) |
+| `template` | `null` | template ativo por padrão (nome em `templates`) |
+| `templates` | `megabrain` | dicionário de templates (`prefix`/`suffix`) |
 | `language` | `null` | idioma (null = auto) |
 | `indicator_enabled` | `true` | overlay ativo/inativo |
 | `indicator_accent` | `#4DA3FF` | cor do overlay gravando |
@@ -98,7 +121,27 @@ Atalho (Hyprland `bindings.conf`):
 ```conf
 bind = SUPER, H, exec, dictation toggle
 bind = SUPER SHIFT, H, exec, dictation toggle -t   # traduz para EN-US
+bind = SUPER, P, r, exec, dictation record         # push-to-talk (ligado ao segurar)
+bindr = SUPER, P, exec, dictation stop             # ... e solto para transcrever
 ```
+
+## Templates (modo "megabrain")
+
+Transcrições podem sair já formatadas como prompt de IA. `dictation templates`
+lista os nomes; o template é escolhido por ditado (`-T <nome>`, lembrado no
+estado) ou fixado no config (`template`). Definição:
+
+```json
+"templates": {
+  "megabrain": {
+    "prefix": "O texto abaixo foi ditado por voz. Reescreva-o corrigindo pontuação, ortografia e estrutura, devolvendo apenas o resultado final, sem comentários:\n\n",
+    "suffix": ""
+  }
+}
+```
+
+O texto final = `prefix + transcrição + suffix`, aplicado após a tradução
+quando ambos estão ativos.
 
 ## Indicador na Waybar
 
