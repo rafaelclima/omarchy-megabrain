@@ -89,6 +89,7 @@ class Indicator:
         self.fading = False
         self.pw = None
         self.wav = None
+        self.started_at = 0.0
         self.audio_file = Path(args.audio_file)
 
         self.window = Gtk.Window(title="dictation-indicator", resizable=False)
@@ -161,23 +162,22 @@ class Indicator:
                 break
         return target or monitors[0]
 
-    def update_ui(self, state, audio_ok):
-        if self.ui_state == state and self.audio_ok == audio_ok:
-            return
-        self.ui_state = state
-        self.audio_ok = audio_ok
-        self.label.remove_css_class("idle")
-        self.label.remove_css_class("active")
-        self.label.remove_css_class("error")
-        if not audio_ok:
-            self.label.set_text("Sem microfone")
-            self.label.add_css_class("error")
-        elif state == "idle":
-            self.label.set_text("Aguardando voz…")
-            self.label.add_css_class("idle")
-        else:
-            self.label.set_text("Gravando…")
-            self.label.add_css_class("active")
+    def update_ui(self, state, audio_ok, label=None):
+        state_changed = self.ui_state != state or self.audio_ok != audio_ok
+        if state_changed:
+            self.ui_state = state
+            self.audio_ok = audio_ok
+            self.label.remove_css_class("idle")
+            self.label.remove_css_class("active")
+            self.label.remove_css_class("error")
+            if not audio_ok:
+                self.label.add_css_class("error")
+            elif state == "idle":
+                self.label.add_css_class("idle")
+            else:
+                self.label.add_css_class("active")
+        if label is not None and self.label.get_text() != label:
+            self.label.set_text(label)
         self.area.queue_draw()
 
     def audio_cb(self, indata, frames, t, status):
@@ -198,12 +198,16 @@ class Indicator:
             return GLib.SOURCE_CONTINUE
         if self.pw is None and self.wav is None and self.audio_ok:
             self.start_pw()
+        dur = ""
+        if self.started_at:
+            secs = int(time.monotonic() - self.started_at)
+            dur = f" {secs // 60:02d}:{secs % 60:02d}"
         if self.pw is None:
-            self.update_ui("idle", False)
+            self.update_ui("idle", False, "Sem microfone")
         elif self.level > 0.05:
-            self.update_ui("active", True)
+            self.update_ui("active", True, f"Gravando…{dur}")
         else:
-            self.update_ui("idle", True)
+            self.update_ui("idle", True, f"Aguardando voz…{dur}")
         self.area.queue_draw()
         self.debug_n = getattr(self, "debug_n", 0) + 1
         if self.debug_n % 10 == 0:
@@ -270,6 +274,7 @@ class Indicator:
     def start_pw(self):
         debug = open("/tmp/dictation-indicator.log", "a")
         try:
+            self.started_at = time.monotonic()
             self.wav = wave.open(str(self.audio_file), "wb")
             self.wav.setnchannels(1)
             self.wav.setsampwidth(2)

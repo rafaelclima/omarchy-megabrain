@@ -51,6 +51,7 @@ monitor ativo (15% da largura, 60px de altura):
 - barras finas de 4px animadas com o nível ao vivo do microfone (escala dB,
   ataque rápido, decay lento, marcador branco no pico)
 - azul `#4DA3FF` enquanto grava, vermelho `#E5484D` em espera
+- **duração do take** no label: `Aguardando voz… 00:05` / `Gravando… 00:07`
 - some com fade-out ao parar
 
 O indicador é o próprio gravador: lê o áudio via `pw-cat` (PipeWire nativo) e
@@ -59,10 +60,17 @@ mede o nível dos **mesmos bytes** que grava em `/tmp/dictation.wav`.
 ## Transcrição híbrida
 
 1. **Groq API** (`whisper-large-v3-turbo`) — online, ~1s, precisão máxima
+   (com **1 retry** automático após 0.5s)
 2. **fallback**: `faster-whisper` (`medium`, int8 CPU) — offline, sem depender de rede
 
-O fallback é usado automaticamente quando a API está indisponível ou expira
-(timeout configurável).
+O fallback é usado automaticamente quando a API está indisponível, com uma
+notificação de aviso. Sem chave Groq, o app usa direto a transcrição local.
+
+## Feedback sonoro (bipes)
+
+Um bipe agudo (880Hz) toca ao iniciar a gravação e um grave (660Hz) ao parar —
+útil no push-to-talk para saber que o release foi capturado. Desative com
+`"beeps": false` no config.
 
 ## Requisitos (Omarchy / Arch Linux)
 
@@ -109,6 +117,7 @@ repositório). Principais chaves:
 | `translate_model` | `null` | modelo do modo tradução (`null` = usa `fallback_model`; ex. `large-v3`) |
 | `translate_prompt` | prompt EN | prompt de pontuação usado apenas na tradução |
 | `min_record_ms` | `300` | gravações mais curtas são canceladas (tap acidental) |
+| `beeps` | `true` | bipe sonoro de início (880Hz) / fim (660Hz) |
 | `template` | `null` | template ativo por padrão (nome em `templates`) |
 | `templates` | `megabrain` | dicionário de templates (`prefix`/`suffix`) |
 | `language` | `null` | idioma (null = auto) |
@@ -122,8 +131,10 @@ Atalho (Hyprland `bindings.conf`):
 ```conf
 bind = SUPER, H, exec, dictation toggle
 bind = SUPER SHIFT, H, exec, dictation toggle -t   # traduz para EN-US
-bind = SUPER, P, r, exec, dictation record         # push-to-talk (ligado ao segurar)
-bindr = SUPER, P, exec, dictation stop             # ... e solto para transcrever
+bindd = SUPER, Q, exec, dictation record           # push-to-talk (ligado ao segurar)
+bindr = SUPER, Q, exec, dictation stop             # ... e solto para transcrever
+bindd = SUPER SHIFT, Q, exec, dictation record     # push-to-talk traduzindo (EN-US)
+bindr = SUPER SHIFT, Q, exec, dictation stop -t
 ```
 
 ## Templates (modo "megabrain")
@@ -150,18 +161,23 @@ O módulo `custom/dictation` (em `~/.config/waybar/`) mostra o estado e permite
 ativar os modos com o mouse:
 
 - **ícone** `󰍬` => dica com os atalhos de cada modo (clique esquerdo transcreve, clique direito traduz)
-- **gravação**: `󰍬 PT` em azul (transcrição) ou `󰍬 EN` em verde (tradução) — atualiza a cada 1s
+- **gravação**: `󰍬 PT` em azul (transcrição) ou `󰍬 EN` em verde (tradução) — **atualização instantânea** via sinal `SIGRTMIN+11` (sem polling)
 - **tooltip**: mostra qual atalho corresponde a cada modo (SUPER+H / SUPER+SHIFT+H) e como parar
 
 ```jsonc
 "custom/dictation": {
   "exec": "/home/SEU_USUARIO/.config/waybar/dictation-status.py",
   "return-type": "json",
-  "interval": 1,
+  "signal": 11,
   "on-click": "dictation toggle",
   "on-click-right": "dictation toggle -t"
 }
 ```
+
+A cada mudança de estado (iniciar/parar/cancelar), o `dictation` entrega
+`SIGRTMIN+11` ao waybar, que re-executa o script na hora — sem custo de polling
+contínuo. Não use `omarchy restart waybar` (duplica a barra); use
+`systemctl --user restart waybar`.
 
 ```css
 #custom-dictation { min-width: 12px; margin: 0 0 0 7.5px; font-size: 12px; }
@@ -177,6 +193,17 @@ de `style.css`):
 ## Debug
 
 Logs em `/tmp/dictation.log` (app) e `/tmp/dictation-indicator.log` (overlay).
+
+## Diagnóstico (`dictation doctor`)
+
+```bash
+dictation doctor
+```
+
+Roda 17 checagens do ambiente (venvs, módulos, binários, chave Groq com
+permissão 600, layer-shell, modelos em cache, config válido, estado órfão,
+script da waybar) e imprime `[  OK]`/`[AVISO]`/`[ERRO]`. Exit code: `0` saudável,
+`1` com avisos, `2` com erros críticos.
 
 ## Notas
 

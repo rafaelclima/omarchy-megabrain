@@ -174,6 +174,7 @@ dictation toggle     # inicia/para gravação + transcreve (PT-BR)
 dictation toggle -t  # inicia/para gravação + traduz para EN-US (offline, grátis)
 dictation record     # só grava (idempotente)
 dictation stop       # para e transcreve
+dictation doctor     # diagnóstico do ambiente (exit 0/1/2)
 ```
 
 ## Testes executados (2026-08-16)
@@ -203,6 +204,13 @@ dictation stop       # para e transcreve
 | Fallback de modelo de tradução (nome inválido) | OK — cai para `fallback_model` com notificação |
 | Regressões toggle PT/EN | OK — fluxos `dictation toggle [-t]` intactos (testes anteriores releitados) |
 | **PTT físico (segurar SUPER+Q no teclado)** | **PENDENTE — usuário** (release é evento físico) |
+| **Retry 1x Groq (chave inválida 401)** | **OK** — 2 tentativas (0.5s entre elas) → fallback local "Olá, como vai? …" correto (28.7s com warm do medium) + aviso low |
+| **Bipes (sinus 880/660Hz, 120ms, s16 48k → `pw-cat --playback --raw -`)** | **OK** — 0.17s por bipe, exit limpo; `beeps: false` silencioso. (Estouro de áudio p/ audição humana: PENDENTE usuário) |
+| **`dictation doctor` happy path** | OK — 17/17 `[  OK]`, EXIT=0 |
+| **`dictation doctor` chave ausente / estado órfão** | OK — `[AVISO]` + EXIT=1 (forma e código corretos, nada falso-positivo) |
+| **Waybar signal (`signal: 11`, sem interval)** | **OK** — durante gravação real: 24px azul `#4DA3FF` no topo (DP-1 3440px) → atualização veio só pelo sinal (sem poll); zero spawns periódicos do script |
+| **Overlay + sinal E2E (toggle real 2s)** | OK — pílula renderizada (accent no rodapé, x=1536/y=2400 a 2x) e RC=0 (fix `stdin=DEVNULL` no spawn) |
+| **Diagnóstico de CPU (queixas do usuário)** | OK — causa: poll de 1s do waybar (Python/mise 1x/s) + testes pesados da sessão (`faster-whisper` warm, `grim` 2x, indicador+PipeWire); nada rodando após limpeza (load 0.84) |
 
 ## Bugs corrigidos
 
@@ -411,16 +419,52 @@ stderr (`/tmp/ind-err.log` limpo).
   (lembrado no estado, como translate) + `template` no config; action
   `templates` lista nomes; `prefix + texto + suffix` aplicado após tradução;
   templates em `cfg["templates"]` (default `megabrain` no DEFAULTS)
+- [x] 2026-08-16 — **Waybar signal-driven** (`signal: 11`): módulo sem
+  `interval` — atualiza por `SIGRTMIN+11` entregue por `waybar_update()`
+  (`pkill -RTMIN+11 -x waybar`, silencioso se ausente) a cada mudança de
+  estado (start/cancel/stop). Elimina o poll de 1s (spawn de um
+  Python/mise por segundo = churn constante de CPU). Sinal 11 escolhido por
+  estar livre (Omarchy usa 7/8/9/10 no mesmo config). **Custo 0 em idle.**
+- [x] 2026-08-16 — **Duração mm:ss no overlay**: `started_at` (monotonic) em
+  `start_pw()`; label atualizado a cada frame `Gravando… 01:23` /
+  `Aguardando voz… 00:47` (tempo total do take, incluindo silêncios do VAD);
+  classes CSS só trocam quando o estado muda (evita flicker)
+- [x] 2026-08-16 — **Bipes de início/fim**: sine 880Hz (start) / 660Hz (stop),
+  120ms, s16/48k mono gerado em stdlib puro → `pw-cat --playback --raw -`
+  (config `beeps`, padrão `true`). **Atenção (bug evitado)**: `pw-cat
+  --playback -` **sem** `--raw` delega ao libsndfile e falha com
+  "Format not recognised" em stdin — `--raw` é obrigatório para stdin
+  desformatado
+- [x] 2026-08-16 — **Retry 1x na Groq**: 2ª tentativa após 0.5s antes de cair
+  no fallback local; aviso `low` "Groq indisponível; usando transcrição
+  local." (também quando a chave está ausente). Notificação não polui: só no
+  caminho de fallback real
+- [x] 2026-08-16 — **`dictation doctor`**: 17 checagens (venvs, módulos,
+  binários, chave/permissão 600, layer-shell, caches HF, config, estado
+  órfão, script waybar); exit 0/1/2 (`[ERRO]`/`[AVISO]`/`[  OK]`). Útil para
+  dar suporte remoto sem mexer no ambiente
+- [x] 2026-08-16 — **`stdin=DEVNULL` no indicador** (bug evitado): sem isso o
+  indicador herdava o stdin do terminal e ferramentas de automação (ex.:
+  bash tool) travavam esperando EOF enquanto o indicador vivia
 
 ## Roadmap / Próximos passos
 
 - [x] 2026-08-16 — Precisão em PT-BR com fala real validada (transcrição correta via Groq)
 - [ ] Calibrar `initial_prompt`/`temperature` para ditados longos
 - [ ] Parada automática por silêncio (VAD) — opcional
-- [ ] Módulo de status no Waybar (indicador de gravação)
+- [x] 2026-08-16 — Módulo de status no Waybar (indicador de gravação) — signal-driven
 - [ ] Fallback local: alternar para `large-v3` int8 se latência aceitável
 - [ ] Live transcription (whisper streaming) no overlay — descartado por ora (custo de CPU alto)
 - [ ] Animar fade-in do indicador (hoje só fade-out)
+
+## Próximo lote (rápidas 8–10 + saneamento)
+
+- [ ] Rotação da chave Groq (segurança — vazou no chat do dia 2026-08-16)
+- [ ] `output: file` + histórico de transcrições
+- [ ] Comandos de voz ("nova linha", "ponto final", …)
+- [ ] Atalho de template (`SUPER+SHIFT+T`)
+- [ ] pytest + ruff + CI
+- [ ] Limpeza de seções obsoletas deste AGENTS.md (estrutura bash antiga, etc.)
 
 ## Notas de segurança
 

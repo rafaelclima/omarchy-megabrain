@@ -1,14 +1,42 @@
 #!/usr/bin/env python3
 import argparse
+import importlib.util
 import json
+import math
 import os
+import shutil
 import signal
+import stat
+import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 CONFIG_PATH = Path(os.environ.get("DICTATION_CONFIG", "~/.config/dictation/config.json")).expanduser()
+
+WAYBAR_SIGNAL = 11
+
+
+def waybar_update():
+    subprocess.run(["pkill", f"-RTMIN+{WAYBAR_SIGNAL}", "-x", "waybar"], check=False)
+
+
+def beep(cfg, start=True):
+    if not cfg.get("beeps", True):
+        return
+    freq = 880 if start else 660
+    rate, dur, amp = 48000, 0.12, 0.25
+    n = int(rate * dur)
+    data = bytearray(n * 2)
+    for i in range(n):
+        v = int(amp * 32767 * math.sin(2 * math.pi * freq * i / rate))
+        data[i * 2:i * 2 + 2] = struct.pack("<h", v)
+    subprocess.run(
+        ["pw-cat", "--playback", "--raw", "--rate", str(rate), "--channels", "1",
+         "--format", "s16", "--volume", "0.5", "-"],
+        input=bytes(data), check=False,
+    )
 
 DEFAULTS = {
     "groq_api_key_path": "~/.config/dictation/groq.api.key",
@@ -133,7 +161,10 @@ def spawn_indicator(cfg):
     preload = layer_shell_preload()
     if preload:
         env["LD_PRELOAD"] = f"{env.get('LD_PRELOAD', '')} {preload}".strip()
-    proc = subprocess.Popen(cmd, stdout=log, stderr=log, start_new_session=True, env=env)
+    proc = subprocess.Popen(
+        cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+        start_new_session=True, env=env,
+    )
     return proc.pid
 
 
@@ -167,6 +198,8 @@ def start_recording(cfg, translate=False, template=None):
         notify("dictation", "Indicador indisponível (venv-gui ausente ou desabilitado).", "critical")
         return
     state_write(cfg, pid, translate, template)
+    waybar_update()
+    beep(cfg, start=True)
     msg = "Gravando… (id. português → EN-US)" if translate else "Gravando…"
     notify("dictation", f"{msg} Pressione o atalho novamente para parar.", "normal")
 
@@ -188,10 +221,13 @@ def stop_recording(cfg, translate=False, template=None):
             state_clear(cfg)
             if audio.exists():
                 audio.unlink()
+            waybar_update()
             notify("dictation", "Gravação muito curta — cancelada.", "normal")
             return
         kill_indicator(state)
         state_clear(cfg)
+    waybar_update()
+    beep(cfg, start=False)
     if not audio.exists() or audio.stat().st_size < 1000:
         notify("dictation", "Gravação vazia — nada transcrito.", "critical")
         return
@@ -226,10 +262,16 @@ def transcribe(cfg, audio, translate=False):
             return transcribe_local(cfg, audio, translate=True, model_name=cfg["fallback_model"])
     key = load_groq_key(cfg)
     if key:
-        try:
-            return transcribe_groq(cfg, audio, key)
-        except Exception as e:
-            print(f"Groq falhou ({e}); usando fallback local…", file=sys.stderr)
+        for attempt in (1, 2):
+            try:
+                return transcribe_groq(cfg, audio, key)
+            except Exception as e:
+                print(f"Groq falhou (tentativa {attempt}: {e}); {'tentando novamente…' if attempt == 1 else 'usando fallback local…'}", file=sys.stderr)
+                if attempt == 1:
+                    time.sleep(0.5)
+        notify("dictation", "Groq indisponível; usando transcrição local.", "low", expire=4000)
+    else:
+        notify("dictation", "Sem chave Groq; usando transcrição local.", "low", expire=4000)
     return transcribe_local(cfg, audio)
 
 
@@ -289,9 +331,104 @@ def output_text(cfg, text):
         subprocess.run(["wtype", "-"], input=text.encode(), check=False)
 
 
+def doctor(cfg):
+    results = []
+
+    def report(level, label, msg):
+        results.append((level, f"{label}: {msg}"))
+
+    venv = PROJECT_DIR / ".venv/bin/python"
+    venv_gui = PROJECT_DIR / ".venv-gui/bin/python"
+    if venv.exists():
+        report("ok", "venv app", f"existe ({venv})")
+    else:
+        report("err", "venv app", f"AUSENTE ({venv}) — pip install faster-whisper groq")
+    if venv_gui.exists():
+        report("ok", "venv indicador", f"existe ({venv_gui})")
+    else:
+        report("err", "venv indicador", "AUSENTE — recriar com --system-site-packages")
+
+    for mod in ("groq", "faster_whisper"):
+        if importlib.util.find_spec(mod) is not None:
+            report("ok", f"módulo {mod}", "importável")
+        else:
+            report("err", f"módulo {mod}", "NÃO encontrado (pip install)")
+
+    if venv_gui.exists():
+        r = subprocess.run(
+            [str(venv_gui), "-c", "import gi, numpy"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            report("ok", "venv indicador deps", "gi + numpy importáveis")
+        else:
+            report("err", "venv indicador deps", f"import falhou: {r.stderr.strip()[:200]}")
+
+    for bin_name in ("pw-cat", "wl-copy", "wtype", "notify-send", "hyprctl"):
+        if shutil.which(bin_name):
+            report("ok", f"binário {bin_name}", shutil.which(bin_name))
+        else:
+            report("err", f"binário {bin_name}", "AUSENTE no PATH")
+
+    key_path = Path(cfg.get("groq_api_key_path", DEFAULTS["groq_api_key_path"])).expanduser()
+    if not key_path.exists():
+        report("warn", "chave Groq", f"ausente ({key_path}) — apenas transcrição local")
+    elif not key_path.read_text().strip():
+        report("warn", "chave Groq", "arquivo vazio")
+    else:
+        mode = stat.S_IMODE(key_path.stat().st_mode)
+        msg = "presente" + ("" if mode == 0o600 else f" (permissão {mode:o} — recomendo 600)")
+        report("ok" if mode == 0o600 else "warn", "chave Groq", msg)
+
+    if layer_shell_preload():
+        report("ok", "layer-shell", f"({layer_shell_preload()})")
+    else:
+        report("err", "layer-shell", "libgtk4-layer-shell.so não encontrada — overlay não funcionará")
+
+    hub = Path.home() / ".cache/huggingface/hub"
+    for model in ("models--Systran--faster-whisper-medium",):
+        if (hub / model).exists():
+            report("ok", f"modelo {model}", "em cache")
+        else:
+            report("err", f"modelo {model}", "AUSENTE — baixar na 1ª transcrição local")
+    translate_model = cfg.get("translate_model")
+    if translate_model:
+        name = "models--Systran--faster-whisper-large-v3"
+        report("ok" if (hub / name).exists() else "warn", f"modelo {name}", f"(translate_model={translate_model})" if (hub / name).exists() else "AUSENTE — modo tradução usará fallback")
+
+    if CONFIG_PATH.exists():
+        try:
+            json.loads(CONFIG_PATH.read_text())
+            report("ok", "config", str(CONFIG_PATH))
+        except Exception as e:
+            report("err", "config", f"JSON inválido: {e}")
+    else:
+        report("warn", "config", f"ausente ({CONFIG_PATH}) — usando defaults")
+
+    state_path = Path(cfg["state_file"])
+    if state_path.exists() and state_read(cfg) is None:
+        report("warn", "estado", "arquivo órfão (pid morto) — rodar `dictation stop`")
+    else:
+        report("ok", "estado", "consistente" if not state_path.exists() else "ativo")
+
+    wb = Path.home() / ".config/waybar/dictation-status.py"
+    if wb.exists() and os.access(wb, os.X_OK):
+        report("ok", "waybar script", str(wb))
+    else:
+        report("warn", "waybar script", f"ausente ou sem exec ({wb})")
+
+    errs = sum(1 for lvl, _ in results if lvl == "err")
+    warns = sum(1 for lvl, _ in results if lvl == "warn")
+    for lvl, line in results:
+        icon = {"ok": "OK", "warn": "AVISO", "err": "ERRO"}[lvl]
+        print(f"[{icon:>5}] {line}")
+    print(f"\n{len(results)} checagens: {errs} erro(s), {warns} aviso(s).")
+    return 2 if errs else (1 if warns else 0)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="dictation", description="Dictation app: voice to text")
-    parser.add_argument("action", choices=["toggle", "record", "stop", "indicator", "templates"])
+    parser.add_argument("action", choices=["toggle", "record", "stop", "indicator", "templates", "doctor"])
     parser.add_argument(
         "-t", "--translate", action="store_true",
         help="Ditado PT-BR → EN-US (offline via faster-whisper, sem custo)",
@@ -306,6 +443,8 @@ def main():
         names = list((cfg.get("templates") or {}).keys())
         print("Templates disponíveis: " + (", ".join(names) if names else "(nenhum)"))
         return
+    if args.action == "doctor":
+        sys.exit(doctor(cfg))
     if args.action == "record":
         start_recording(cfg, translate=args.translate, template=args.template)
     elif args.action == "stop":
