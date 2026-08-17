@@ -189,6 +189,7 @@ def start_recording(cfg, translate=False, template=None):
     if is_recording(cfg):
         notify("dictation", "Gravação já em andamento.", "normal")
         return
+    beep(cfg, start=True)
     audio = Path(cfg["audio_file"])
     audio.parent.mkdir(parents=True, exist_ok=True)
     if audio.exists():
@@ -199,7 +200,6 @@ def start_recording(cfg, translate=False, template=None):
         return
     state_write(cfg, pid, translate, template)
     waybar_update()
-    beep(cfg, start=True)
     msg = "Gravando… (id. português → EN-US)" if translate else "Gravando…"
     notify("dictation", f"{msg} Pressione o atalho novamente para parar.", "normal")
 
