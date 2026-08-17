@@ -206,6 +206,29 @@ def start_recording(cfg, translate=False, template=None):
 
 def stop_recording(cfg, translate=False, template=None):
     state = state_read(cfg)
+    if state is None:
+        path = Path(cfg["state_file"])
+        for _ in range(12):
+            if path.exists():
+                break
+            time.sleep(0.1)
+        state = state_read(cfg)
+        if state is None and path.exists():
+            try:
+                data = json.loads(path.read_text())
+                pid = data.get("pid")
+                alive = False
+                if pid:
+                    try:
+                        os.kill(pid, 0)
+                        alive = True
+                    except ProcessLookupError:
+                        alive = False
+                if not alive:
+                    path.unlink()
+                    waybar_update()
+            except Exception:
+                pass
     if state:
         if state.get("translate"):
             translate = True

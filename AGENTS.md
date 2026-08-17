@@ -204,6 +204,8 @@ dictation doctor     # diagnóstico do ambiente (exit 0/1/2)
 | Fallback de modelo de tradução (nome inválido) | OK — cai para `fallback_model` com notificação |
 | Regressões toggle PT/EN | OK — fluxos `dictation toggle [-t]` intactos (testes anteriores releitados) |
 | **PTT físico (segurar SUPER+Q no teclado)** | **PENDENTE — usuário** (release é evento físico) |
+| **Race PTT press/release (bug #8)** | **OK** — `record` + `stop` imediatos (mesmo instante): sem state residual, sem indicador órfão (antes: stop virava no-op e a gravação ficava presa) |
+| **Estado stale no stop (pid morto)** | OK — stop remove o arquivo + waybar_update; sem state residual |
 | **Retry 1x Groq (chave inválida 401)** | **OK** — 2 tentativas (0.5s entre elas) → fallback local "Olá, como vai? …" correto (28.7s com warm do medium) + aviso low |
 | **Bipes (sinus 880/660Hz, 120ms, s16 48k → `pw-cat --playback --raw -`)** | **OK** — 0.17s por bipe, exit limpo; `beeps: false` silencioso. (Estouro de áudio p/ audição humana: PENDENTE usuário) |
 | **`dictation doctor` happy path** | OK — 17/17 `[  OK]`, EXIT=0 |
@@ -213,6 +215,28 @@ dictation doctor     # diagnóstico do ambiente (exit 0/1/2)
 | **Diagnóstico de CPU (queixas do usuário)** | OK — causa: poll de 1s do waybar (Python/mise 1x/s) + testes pesados da sessão (`faster-whisper` warm, `grim` 2x, indicador+PipeWire); nada rodando após limpeza (load 0.84) |
 
 ## Bugs corrigidos
+
+### Bug #8 — PTT: release perdido quando o press ainda não escreveu o state (gravação presa)
+**Data:** 2026-08-16 — **Status: RESOLVIDO**
+
+**Sintoma:** no push-to-talk (`SUPER+Q`), soltar as teclas às vezes não finaliza a
+gravação — ela fica presa/ativa sem como parar pela mesma combinação.
+
+**Causa raiz:** corrida de ~231ms. `bindd` (press) → `dictation record`: o
+processo Python leva ~231ms até escrever `/tmp/dictation.state` (startup +
+spawn do indicador). Num release rápido (tap), `bindr` → `dictation stop`
+executa **antes** do state existir → caía no "Nenhuma gravação em andamento."
+e retornava sem ação; no instante seguinte o `record` escrevia o state →
+gravação ativa, sem comando que a pare.
+
+**Fix:** `stop_recording` agora **espera o state surgir** (até ~1.2s, polling de
+100ms) antes de declarar que não há gravação; se o arquivo existir com **pid
+morto** (stale), remove-o (com `waybar_update`). O guard `min_record_ms`
+continua valendo após o state ser encontrado (taps < 300ms cancelam).
+
+**Validação:** `record` + `stop` no MESMO instante → fim limpo (state removido,
+sem indicador órfão); stale (pid morto) → arquivo removido; PTT completo
+1s → transcreve e limpa. (Aguardando revalidação física do usuário.)
 
 ### Bug #1 — Idioma forçado corrompia transcrição de outros idiomas
 **Data:** 2026-08-16
