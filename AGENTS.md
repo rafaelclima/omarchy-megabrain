@@ -234,9 +234,20 @@ gravação ativa, sem comando que a pare.
 morto** (stale), remove-o (com `waybar_update`). O guard `min_record_ms`
 continua valendo após o state ser encontrado (taps < 300ms cancelam).
 
+**Regressão (relatada pelo usuário em 2026-08-16):** a gravação voltou a ficar
+presa no PTT mesmo com o fix. **Causa:** o fix do beep (#7, beep antes do
+spawn) **bloqueava o record** ~170ms+ (e sem limite se o sink BT estivesse
+negociando profile) → `state_write` chegava além da janela de poll do stop →
+release virava no-op de novo. **Fix final:** `state_write` passa a ser feito
+**IMEDIATAMENTE após o spawn** (46ms do press até o state) e o beep toca
+**depois**, com timeout de 2s; poll do stop aumentado para 1.5s; + log
+diagnóstico em `/tmp/dictation.log` (`record: pid=…` / `stop: state=…` /
+`beep: pw-cat timeout`).
+
 **Validação:** `record` + `stop` no MESMO instante → fim limpo (state removido,
 sem indicador órfão); stale (pid morto) → arquivo removido; PTT completo
-1s → transcreve e limpa. (Aguardando revalidação física do usuário.)
+1s → transcreve e limpa; latência do state medida em **46ms**. (Aguardando
+revalidação física do usuário.)
 
 ### Bug #1 — Idioma forçado corrompia transcrição de outros idiomas
 **Data:** 2026-08-16
@@ -458,11 +469,12 @@ stderr (`/tmp/ind-err.log` limpo).
   (config `beeps`, padrão `true`). **Atenção (bug evitado)**: `pw-cat
   --playback -` **sem** `--raw` delega ao libsndfile e falha com
   "Format not recognised" em stdin — `--raw` é obrigatório para stdin
-  desformatado. **Ordem importa (bug #7, 2026-08-16)**: o beep de início
-  toca **ANTES** de spawnar o indicador — tocando depois, caía na janela em
-  que o `pw-cat --record` abre o source BT (case Space One) e o adapter
-  suspende o A2DP (perde-se o som); o beep de parada toca com o adapter
-  livre (reportado OK pelo usuário)
+  desformatado. **Ordem (bugs #7 + #8, 2026-08-16)**: o beep NUNCA pode
+  atrasar a escrita do state (release do PTT depende dele). Beep toca
+  **depois** do `state_write` (46ms do press ao state), com **timeout 2s**
+  no pw-cat (sink BT lento → desiste e segue). Beep de início ouvido no
+  caso normal; pode se perder se o adapter BT estiver negociando (trade-off
+  aceito: confiabilidade do PTT primeiro)
 - [x] 2026-08-16 — **Retry 1x na Groq**: 2ª tentativa após 0.5s antes de cair
   no fallback local; aviso `low` "Groq indisponível; usando transcrição
   local." (também quando a chave está ausente). Notificação não polui: só no

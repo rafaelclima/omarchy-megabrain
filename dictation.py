@@ -32,11 +32,14 @@ def beep(cfg, start=True):
     for i in range(n):
         v = int(amp * 32767 * math.sin(2 * math.pi * freq * i / rate))
         data[i * 2:i * 2 + 2] = struct.pack("<h", v)
-    subprocess.run(
-        ["pw-cat", "--playback", "--raw", "--rate", str(rate), "--channels", "1",
-         "--format", "s16", "--volume", "0.5", "-"],
-        input=bytes(data), check=False,
-    )
+    try:
+        subprocess.run(
+            ["pw-cat", "--playback", "--raw", "--rate", str(rate), "--channels", "1",
+             "--format", "s16", "--volume", "0.5", "-"],
+            input=bytes(data), check=False, timeout=2,
+        )
+    except subprocess.TimeoutExpired:
+        log_line("beep: pw-cat timeout (sink BT lento?)")
 
 DEFAULTS = {
     "groq_api_key_path": "~/.config/dictation/groq.api.key",
@@ -82,6 +85,14 @@ def load_config():
 
 def notify(app, body, urgency="normal", expire=5000):
     subprocess.run(["notify-send", "-a", app, "-u", urgency, "-t", str(expire), app, body], check=False)
+
+
+def log_line(msg):
+    try:
+        with open("/tmp/dictation.log", "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
 
 
 def state_read(cfg):
@@ -189,7 +200,6 @@ def start_recording(cfg, translate=False, template=None):
     if is_recording(cfg):
         notify("dictation", "Gravação já em andamento.", "normal")
         return
-    beep(cfg, start=True)
     audio = Path(cfg["audio_file"])
     audio.parent.mkdir(parents=True, exist_ok=True)
     if audio.exists():
@@ -200,6 +210,8 @@ def start_recording(cfg, translate=False, template=None):
         return
     state_write(cfg, pid, translate, template)
     waybar_update()
+    beep(cfg, start=True)
+    log_line(f"record: pid={pid} translate={translate}")
     msg = "Gravando… (id. português → EN-US)" if translate else "Gravando…"
     notify("dictation", f"{msg} Pressione o atalho novamente para parar.", "normal")
 
@@ -208,7 +220,7 @@ def stop_recording(cfg, translate=False, template=None):
     state = state_read(cfg)
     if state is None:
         path = Path(cfg["state_file"])
-        for _ in range(12):
+        for _ in range(15):
             if path.exists():
                 break
             time.sleep(0.1)
@@ -227,8 +239,10 @@ def stop_recording(cfg, translate=False, template=None):
                 if not alive:
                     path.unlink()
                     waybar_update()
+                    log_line("stop: state stale removido")
             except Exception:
                 pass
+        log_line(f"stop: state={'encontrado (poll)' if state else 'ausente'}")
     if state:
         if state.get("translate"):
             translate = True
@@ -252,9 +266,11 @@ def stop_recording(cfg, translate=False, template=None):
     waybar_update()
     beep(cfg, start=False)
     if not audio.exists() or audio.stat().st_size < 1000:
+        log_line("stop: audio vazio/ausente")
         notify("dictation", "Gravação vazia — nada transcrito.", "critical")
         return
     text = transcribe(cfg, audio, translate=translate)
+    log_line(f"stop: transcrito ({len(text or '')} chars)")
     if text:
         text = apply_template(cfg, text, template)
         output_text(cfg, text)
