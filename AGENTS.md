@@ -434,7 +434,11 @@ stderr (`/tmp/ind-err.log` limpo).
   (config `beeps`, padrão `true`). **Atenção (bug evitado)**: `pw-cat
   --playback -` **sem** `--raw` delega ao libsndfile e falha com
   "Format not recognised" em stdin — `--raw` é obrigatório para stdin
-  desformatado
+  desformatado. **Ordem importa (bug #7, 2026-08-16)**: o beep de início
+  toca **ANTES** de spawnar o indicador — tocando depois, caía na janela em
+  que o `pw-cat --record` abre o source BT (case Space One) e o adapter
+  suspende o A2DP (perde-se o som); o beep de parada toca com o adapter
+  livre (reportado OK pelo usuário)
 - [x] 2026-08-16 — **Retry 1x na Groq**: 2ª tentativa após 0.5s antes de cair
   no fallback local; aviso `low` "Groq indisponível; usando transcrição
   local." (também quando a chave está ausente). Notificação não polui: só no
