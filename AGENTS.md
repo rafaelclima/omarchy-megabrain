@@ -96,6 +96,8 @@ source Bluetooth (ver Bug #4).
   "output": "paste",
   "state_file": "/tmp/dictation.state",
   "audio_file": "/tmp/dictation.wav",
+  "auto_stop_silence_ms": 2500,
+  "min_record_ms": 300,
   "indicator_enabled": true,
   "indicator_width_pct": 0.15,
   "indicator_height": 60,
@@ -175,6 +177,7 @@ dictation toggle -t  # inicia/para gravação + traduz para EN-US (offline, grá
 dictation record     # só grava (idempotente)
 dictation stop       # para e transcreve
 dictation doctor     # diagnóstico do ambiente (exit 0/1/2)
+dictation transcribe-file <wav> [-t] [-T template]  # transcreve um arquivo (usado pelo auto-stop)
 ```
 
 ## Testes executados (2026-08-16)
@@ -213,6 +216,9 @@ dictation doctor     # diagnóstico do ambiente (exit 0/1/2)
 | **Waybar signal (`signal: 11`, sem interval)** | **OK** — durante gravação real: 24px azul `#4DA3FF` no topo (DP-1 3440px) → atualização veio só pelo sinal (sem poll); zero spawns periódicos do script |
 | **Overlay + sinal E2E (toggle real 2s)** | OK — pílula renderizada (accent no rodapé, x=1536/y=2400 a 2x) e RC=0 (fix `stdin=DEVNULL` no spawn) |
 | **Diagnóstico de CPU (queixas do usuário)** | OK — causa: poll de 1s do waybar (Python/mise 1x/s) + testes pesados da sessão (`faster-whisper` warm, `grim` 2x, indicador+PipeWire); nada rodando após limpeza (load 0.84) |
+| **Auto-stop VAD E2E (tom 220Hz 2s via pipe-source → silêncio)** | **OK** — auto-stop em ~2.5s: state removido, `/tmp/dictation.autostop` criado (com pid do transcriber), indicador fechado, log "auto-stop por silêncio" |
+| **`dictation transcribe-file` (áudio TTS PT-BR, config temp clipboard)** | **OK** — Groq transcreveu exata ("Olá, como vai? Hoje está um dia lindo para programar. …"), rc=0, clipboard correto |
+| **stop com marker `/tmp/dictation.autostop` presente** | OK — limpa o marker + aviso "finalizada automaticamente (silêncio)", sem tocar em state/audio |
 
 ## Bugs corrigidos
 
@@ -248,6 +254,39 @@ diagnóstico em `/tmp/dictation.log` (`record: pid=…` / `stop: state=…` /
 sem indicador órfão); stale (pid morto) → arquivo removido; PTT completo
 1s → transcreve e limpa; latência do state medida em **46ms**. (Aguardando
 revalidação física do usuário.)
+
+### Bug #9 — PTT: release perdido quando SUPER é solta antes do Q (bindr do Hyprland)
+**Data:** 2026-08-16 — **Status: MITIGADO (auto-stop VAD)**
+
+**Sintoma:** após os fixes #7/#8, o PTT continuava falhando de forma
+intermitente: soltar as teclas deixava a gravação ativa (pílula na tela), sem
+como parar pela mesma combinação; re-press repetido do atalho parava.
+
+**Causa raiz:** limitação do **`bindr` do Hyprland** — o evento de release só
+dispara se a combinação **ainda estiver válida no instante do release**. Se a
+tecla `SUPER` é solta antes da `Q` (muito comum ao soltar rápido), o bindr
+`SUPER,Q` não é mais reconhecido → nenhum `dictation stop` é executado. O log
+confirmou: cada take tinha **exatamente 1** `record` e apenas os `stop`
+disparados por re-press manual; os releases 2 e 3 **não geraram evento** no
+Hyprland (não é race do app — é o dispatcher que nunca rodou). `binde` é
+repeat-only e `pass` não serve aqui; não há conserto no binding.
+
+**Mitigação (rede de segurança):** **auto-stop por silêncio (VAD)** —
+`auto_stop_silence_ms` (padrão 2500ms, configurável; `0` desliga). O indicador
+rastreia o nível do microfone (mesmos bytes gravados) e, sem voz por ≥ o
+limite (e já fora do guard `min_record_ms`), finaliza sozinho: mata o `pw-cat`,
+fecha o WAV, **spawna `dictation transcribe-file`** (herda translate/template
+do state) e grava o marker `/tmp/dictation.autostop` (pid do transcriber).
+`dictation stop` posterior vê o marker → avisa "finalizada automaticamente" e
+limpa; um novo `record` remove o marker no início. Nova action **`transcribe-file
+<wav>`** extrai o caminho de transcrição do fim do `stop_recording` (refactor
+`finish_recording()`).
+
+**Validação:** E2E determinístico via `module-pipe-source` (FIFO): tom 220Hz
+2s → silêncio → auto-stop em ~2.5s (state removido, marker criado, indicador
+fechado, transcriber spawnado); `transcribe-file` com áudio TTS → Groq exata
+no clipboard; stop com marker → limpeza + aviso. **Ainda pendente: revalidação
+física do PTT pelo usuário** (release é evento físico).
 
 ### Bug #1 — Idioma forçado corrompia transcrição de outros idiomas
 **Data:** 2026-08-16
@@ -486,12 +525,20 @@ stderr (`/tmp/ind-err.log` limpo).
 - [x] 2026-08-16 — **`stdin=DEVNULL` no indicador** (bug evitado): sem isso o
   indicador herdava o stdin do terminal e ferramentas de automação (ex.:
   bash tool) travavam esperando EOF enquanto o indicador vivia
+- [x] 2026-08-16 — **Auto-stop por silêncio (VAD)** (`auto_stop_silence_ms`,
+  padrão 2500ms, `0` desliga): rede de segurança do PTT (bug #9 — bindr do
+  Hyprland não dispara se SUPER é solta antes da Q). Indicador detecta
+  silêncio nos mesmos bytes que grava → finaliza sozinho + spawna
+  `dictation transcribe-file` (herda translate/template do state) + marker
+  `/tmp/dictation.autostop`; `stop` posterior avisa e limpa; `record` novo
+  remove o marker. Nova action `transcribe-file <wav>` (transcrição extraída
+  em `finish_recording()`, compartilhada com o stop normal)
 
 ## Roadmap / Próximos passos
 
 - [x] 2026-08-16 — Precisão em PT-BR com fala real validada (transcrição correta via Groq)
 - [ ] Calibrar `initial_prompt`/`temperature` para ditados longos
-- [ ] Parada automática por silêncio (VAD) — opcional
+- [x] 2026-08-16 — Parada automática por silêncio (VAD) — implementada (bug #9)
 - [x] 2026-08-16 — Módulo de status no Waybar (indicador de gravação) — signal-driven
 - [ ] Fallback local: alternar para `large-v3` int8 se latência aceitável
 - [ ] Live transcription (whisper streaming) no overlay — descartado por ora (custo de CPU alto)

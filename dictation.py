@@ -50,6 +50,7 @@ DEFAULTS = {
     "translate_model": None,
     "translate_prompt": "Translate to US English with correct punctuation.",
     "min_record_ms": 300,
+    "auto_stop_silence_ms": 2500,
     "template": None,
     "templates": {
         "megabrain": {
@@ -163,6 +164,8 @@ def spawn_indicator(cfg):
         "--margin-bottom", str(cfg.get("indicator_margin_bottom", 28)),
         "--accent", cfg.get("indicator_accent", "#BE3F50"),
         "--idle", cfg.get("indicator_idle", "#14B9B5"),
+        "--auto-stop-ms", str(cfg.get("auto_stop_silence_ms", 2500)),
+        "--min-record-ms", str(cfg.get("min_record_ms", 300)),
     ]
     mon = active_monitor()
     if mon:
@@ -200,6 +203,7 @@ def start_recording(cfg, translate=False, template=None):
     if is_recording(cfg):
         notify("dictation", "Gravação já em andamento.", "normal")
         return
+    Path("/tmp/dictation.autostop").unlink(missing_ok=True)
     audio = Path(cfg["audio_file"])
     audio.parent.mkdir(parents=True, exist_ok=True)
     if audio.exists():
@@ -217,6 +221,11 @@ def start_recording(cfg, translate=False, template=None):
 
 
 def stop_recording(cfg, translate=False, template=None):
+    marker = Path("/tmp/dictation.autostop")
+    if marker.exists():
+        marker.unlink()
+        notify("dictation", "Gravação finalizada automaticamente (silêncio).", "normal")
+        return
     state = state_read(cfg)
     if state is None:
         path = Path(cfg["state_file"])
@@ -265,12 +274,16 @@ def stop_recording(cfg, translate=False, template=None):
         state_clear(cfg)
     waybar_update()
     beep(cfg, start=False)
+    finish_recording(cfg, audio, translate, template)
+
+
+def finish_recording(cfg, audio, translate=False, template=None):
     if not audio.exists() or audio.stat().st_size < 1000:
-        log_line("stop: audio vazio/ausente")
+        log_line("finish: audio vazio/ausente")
         notify("dictation", "Gravação vazia — nada transcrito.", "critical")
         return
     text = transcribe(cfg, audio, translate=translate)
-    log_line(f"stop: transcrito ({len(text or '')} chars)")
+    log_line(f"finish: transcrito ({len(text or '')} chars)")
     if text:
         text = apply_template(cfg, text, template)
         output_text(cfg, text)
@@ -467,7 +480,7 @@ def doctor(cfg):
 
 def main():
     parser = argparse.ArgumentParser(prog="dictation", description="Dictation app: voice to text")
-    parser.add_argument("action", choices=["toggle", "record", "stop", "indicator", "templates", "doctor"])
+    parser.add_argument("action", choices=["toggle", "record", "stop", "indicator", "templates", "doctor", "transcribe-file"])
     parser.add_argument(
         "-t", "--translate", action="store_true",
         help="Ditado PT-BR → EN-US (offline via faster-whisper, sem custo)",
@@ -476,6 +489,7 @@ def main():
         "-T", "--template", default=None,
         help="Aplica um template (prefixo/sufixo) à transcrição (ex.: megabrain)",
     )
+    parser.add_argument("audio", nargs="?", default=None, help="Arquivo de áudio (action transcribe-file)")
     args = parser.parse_args()
     cfg = load_config()
     if args.action == "templates":
@@ -484,6 +498,12 @@ def main():
         return
     if args.action == "doctor":
         sys.exit(doctor(cfg))
+    if args.action == "transcribe-file":
+        if not args.audio:
+            print("transcribe-file requer o caminho do áudio", file=sys.stderr)
+            sys.exit(2)
+        finish_recording(cfg, Path(args.audio), translate=args.translate, template=args.template)
+        return
     if args.action == "record":
         start_recording(cfg, translate=args.translate, template=args.template)
     elif args.action == "stop":

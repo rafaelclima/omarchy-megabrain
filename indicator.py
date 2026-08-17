@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import math
 import os
 import signal
@@ -90,7 +91,11 @@ class Indicator:
         self.pw = None
         self.wav = None
         self.started_at = 0.0
+        self.silence_since = None
+        self.auto_stopped = False
         self.audio_file = Path(args.audio_file)
+        self.auto_stop_ms = args.auto_stop_ms
+        self.min_record_ms = args.min_record_ms
 
         self.window = Gtk.Window(title="dictation-indicator", resizable=False)
         self.window.set_decorated(False)
@@ -198,6 +203,17 @@ class Indicator:
             return GLib.SOURCE_CONTINUE
         if self.pw is None and self.wav is None and self.audio_ok:
             self.start_pw()
+        if self.auto_stop_ms and self.pw is not None and not self.auto_stopped:
+            if self.level < 0.05:
+                if self.silence_since is None:
+                    self.silence_since = time.monotonic()
+                elif time.monotonic() - self.silence_since >= self.auto_stop_ms / 1000.0:
+                    if time.monotonic() - self.started_at < self.min_record_ms / 1000.0:
+                        self.silence_since = None
+                    else:
+                        self.auto_stop()
+            else:
+                self.silence_since = None
         dur = ""
         if self.started_at:
             secs = int(time.monotonic() - self.started_at)
@@ -329,6 +345,45 @@ class Indicator:
                 pass
             self.wav = None
 
+    def auto_stop(self):
+        self.auto_stopped = True
+        debug = open("/tmp/dictation-indicator.log", "a")
+        print("auto-stop por silêncio", file=debug, flush=True)
+        translate, template = False, None
+        try:
+            st = json.loads(self.state_file.read_text())
+            translate = bool(st.get("translate"))
+            template = st.get("template")
+        except Exception:
+            pass
+        try:
+            proj = Path(os.path.realpath(__file__)).resolve().parent
+            py = proj / ".venv/bin/python"
+            if py.exists():
+                cmd = [str(py), str(proj / "dictation.py"), "transcribe-file",
+                       str(self.audio_file)]
+                if translate:
+                    cmd.append("--translate")
+                if template:
+                    cmd.extend(["--template", str(template)])
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                Path("/tmp/dictation.autostop").write_text(
+                    json.dumps({"pid": proc.pid, "started": time.time()})
+                )
+                print(f"auto-stop: transcriber pid={proc.pid}", file=debug, flush=True)
+        except Exception as e:
+            print(f"auto-stop: transcriber falhou: {e}", file=debug, flush=True)
+        try:
+            self.state_file.unlink()
+        except Exception:
+            pass
+        subprocess.run(["pkill", "-RTMIN+11", "-x", "waybar"], check=False)
+        self.finalize()
+        self.start_fade()
+
     def on_signal(self, signum, frame):
         GLib.idle_add(self.start_fade)
 
@@ -343,6 +398,8 @@ def main():
     parser.add_argument("--margin-bottom", type=int, default=28)
     parser.add_argument("--accent", default="#BE3F50")
     parser.add_argument("--idle", default="#14B9B5")
+    parser.add_argument("--auto-stop-ms", type=int, default=2500)
+    parser.add_argument("--min-record-ms", type=int, default=300)
     args = parser.parse_args()
     Indicator(args).run()
 
